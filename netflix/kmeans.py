@@ -21,14 +21,16 @@ def estep(X: np.ndarray, mixture: GaussianMixture) -> np.ndarray:
     K, _ = mixture.mu.shape
     post = np.zeros((n, K))
 
+    ll = 0
     for i in range(n):
-        tiled_vector = np.tile(X[i, :], (K, 1))
-        sse = ((tiled_vector - mixture.mu)**2).sum(axis=1)
-        j = np.argmin(sse)
-        post[i, j] = 1
+        for j in range(K):
+            likelihood = gaussian(X[i], mixture.mu[j], mixture.var[j])
+            post[i, j] = mixture.p[j] * likelihood
+        total = post[i, :].sum()
+        post[i, :] = post[i, :] / total
+        ll += np.log(total)
 
-    return post
-
+    return post, ll
 
 def mstep(X: np.ndarray, post: np.ndarray) -> Tuple[GaussianMixture, float]:
     """M-step: Updates the gaussian mixture. Each cluster
@@ -48,17 +50,17 @@ def mstep(X: np.ndarray, post: np.ndarray) -> Tuple[GaussianMixture, float]:
     n_hat = post.sum(axis=0)
     p = n_hat / n
 
-    cost = 0
     mu = np.zeros((K, d))
     var = np.zeros(K)
 
     for j in range(K):
-        mu[j, :] = post[:, j] @ X / n_hat[j]
+        # Computing mean
+        mu[j, :] = (X * post[:, j, None]).sum(axis=0) / n_hat[j]
+        # Computing variance
         sse = ((mu[j] - X)**2).sum(axis=1) @ post[:, j]
-        cost += sse
         var[j] = sse / (d * n_hat[j])
 
-    return GaussianMixture(mu, var, p), cost
+    return GaussianMixture(mu, var, p)
 
 
 def run(X: np.ndarray, mixture: GaussianMixture,
@@ -77,11 +79,11 @@ def run(X: np.ndarray, mixture: GaussianMixture,
         float: distortion cost of the current assignment
     """
 
-    prev_cost = None
-    cost = None
-    while (prev_cost is None or prev_cost - cost > 1e-4):
-        prev_cost = cost
-        post = estep(X, mixture)
-        mixture, cost = mstep(X, post)
+    prev_ll = None
+    ll = None
+    while (prev_ll is None or ll - prev_ll > 1e-6 * np.abs(ll)):
+        prev_ll = ll
+        post, ll = estep(X, mixture)
+        mixture = mstep(X, post, mixture)
 
-    return mixture, post, cost
+    return mixture, post, ll
